@@ -24,10 +24,26 @@ jobs:
         with:
           version: 3.1.61 # TODO: pin a version known to build upstream msdfgen + FreeType port
 
+      # FreeType ships as an Emscripten port; build it and point find_package at its
+      # cached headers/lib so msdfgen's `find_package(Freetype REQUIRED)` succeeds.
+      - name: Build FreeType port & locate
+        run: |
+          embuilder build freetype
+          SYSROOT="$(em-config CACHE)/sysroot"
+          echo "sysroot: $SYSROOT"
+          find "$SYSROOT" \( -name 'ft2build.h' -o -name 'libfreetype*.a' \) | sort
+          FT2BUILD="$(find "$SYSROOT" -name 'ft2build.h' | head -1)"
+          echo "FT_INC=$(dirname "$FT2BUILD")" >> "$GITHUB_ENV"
+          echo "FT_LIB=$(find "$SYSROOT" -name 'libfreetype.a' | head -1)" >> "$GITHUB_ENV"
+
       - name: Configure & build
         run: |
-          emcmake cmake -B build -DCMAKE_BUILD_TYPE=Release
-          cmake --build build
+          emcmake cmake -B build -DCMAKE_BUILD_TYPE=Release \
+            -DFREETYPE_LIBRARY="$FT_LIB" \
+            -DFREETYPE_INCLUDE_DIRS="$FT_INC" \
+            -DFREETYPE_INCLUDE_DIR_ft2build="$FT_INC" \
+            -DFREETYPE_INCLUDE_DIR_freetype2="$FT_INC"
+          cmake --build build --verbose
 
       - name: Build TS loader
         run: |

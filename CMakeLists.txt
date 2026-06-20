@@ -19,6 +19,10 @@ set(MSDFGEN_USE_SKIA       OFF CACHE BOOL "" FORCE)
 set(MSDFGEN_USE_VCPKG      OFF CACHE BOOL "" FORCE)
 set(MSDFGEN_INSTALL        OFF CACHE BOOL "" FORCE)
 set(MSDFGEN_DYNAMIC_RUNTIME OFF CACHE BOOL "" FORCE)
+# Drop optional ext deps we don't need (SVG=tinyxml2, PNG=libpng); we load fonts via
+# FreeType and emit raw RGBA, leaving FreeType as the only third-party dependency.
+set(MSDFGEN_DISABLE_SVG    ON  CACHE BOOL "" FORCE)
+set(MSDFGEN_DISABLE_PNG    ON  CACHE BOOL "" FORCE)
 
 add_subdirectory(vendor/msdfgen)
 
