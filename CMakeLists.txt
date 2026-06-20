@@ -23,6 +23,10 @@ set(MSDFGEN_DYNAMIC_RUNTIME OFF CACHE BOOL "" FORCE)
 # FreeType and emit raw RGBA, leaving FreeType as the only third-party dependency.
 set(MSDFGEN_DISABLE_SVG    ON  CACHE BOOL "" FORCE)
 set(MSDFGEN_DISABLE_PNG    ON  CACHE BOOL "" FORCE)
+# Emscripten's FreeType port (2.6.0) predates the variable-font API msdfgen v1.13 uses
+# (FT_Get_Var_Design_Coordinates / FT_Done_MM_Var); compile that path out (we don't need it).
+set(MSDFGEN_DISABLE_VARIABLE_FONTS ON CACHE BOOL "" FORCE)
+add_compile_definitions(MSDFGEN_DISABLE_VARIABLE_FONTS)
 
 add_subdirectory(vendor/msdfgen)
 
@@ -39,7 +43,6 @@ target_link_options(msdfgen PRIVATE
     "-sEXPORT_NAME=createMsdfgenModule"
     "-sALLOW_MEMORY_GROWTH=1"
     "-sENVIRONMENT=web,worker,node"
-    "-sEXPORTED_RUNTIME_METHODS=['typed_memory_view']"
 )
 
 set_target_properties(msdfgen PROPERTIES

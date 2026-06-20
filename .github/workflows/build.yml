@@ -45,10 +45,7 @@ jobs:
             -DFREETYPE_INCLUDE_DIR_freetype2="$FT_INC"
           cmake --build build --verbose
 
-      - name: Build TS loader
-        run: |
-          npm ci
-          npm run build:ts
+      # (TS loader build re-added once the loader is finalized + a package-lock exists.)
 
       - name: Commit artifacts
         uses: stefanzweifel/git-auto-commit-action@v5
