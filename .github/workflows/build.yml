@@ -1,0 +1,41 @@
+# Builds the WASM artifact and commits dist/ (the ammo.js pattern: build in CI, commit
+# the binary). Pin the emsdk version so builds are reproducible.
+name: build
+
+on:
+  workflow_dispatch: {}
+  push:
+    paths:
+      - 'cpp/**'
+      - 'CMakeLists.txt'
+      - 'vendor/**'
+      - '.github/workflows/build.yml'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup emsdk
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: 3.1.61 # TODO: pin a version known to build upstream msdfgen + FreeType port
+
+      - name: Configure & build
+        run: |
+          emcmake cmake -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build
+
+      - name: Build TS loader
+        run: |
+          npm ci
+          npm run build:ts
+
+      - name: Commit artifacts
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: 'build: update wasm + loader artifacts'
+          file_pattern: 'dist/*'
