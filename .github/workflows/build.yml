@@ -1,5 +1,5 @@
-# Builds the WASM artifact and commits dist/ (the ammo.js pattern: build in CI, commit
-# the binary). Pin the emsdk version so builds are reproducible.
+# Builds the WASM artifact and commits dist/ to the repo (build in CI, commit the binary
+# so consumers need no toolchain). Pin the emsdk version so builds are reproducible.
 name: build
 
 on:

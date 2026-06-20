@@ -2,7 +2,7 @@
 
 Upstream [Chlumsky/msdfgen](https://github.com/Chlumsky/msdfgen) (v1.13, MIT) compiled to **WebAssembly** — generates per-glyph multi-channel signed distance fields in **Node and the browser**. It's the generation core behind [`@playcanvas/font-tools`](https://github.com/playcanvas/font-tools).
 
-No fork, no patches: upstream msdfgen is pinned as a submodule and built with a thin Emscripten/embind binding. (Build/CI mirror the `playcanvas/ammo.js` pattern — build in CI, commit the artifact.)
+No fork, no patches: upstream msdfgen is pinned as a submodule and built with a thin Emscripten/embind binding. CI builds the WASM and commits the artifact to the repo, so consumers install with no toolchain.
 
 ## Install
 
