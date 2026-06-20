@@ -1,6 +1,6 @@
 {
   "name": "@playcanvas/msdfgen-wasm",
-  "version": "0.1.0",
+  "version": "0.0.0",
   "description": "Upstream Chlumsky/msdfgen compiled to WebAssembly (em-normalized MSDF glyph generation) for PlayCanvas font tooling. Runs in Node and the browser.",
   "type": "module",
   "license": "MIT",

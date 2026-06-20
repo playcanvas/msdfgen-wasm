@@ -1,0 +1,41 @@
+name: Publish
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+
+# Publishes the committed dist/ (built by build.yml) to npm. Tokenless via npm trusted
+# publishing (OIDC) — configure a trusted publisher for @playcanvas/msdfgen-wasm pointing
+# at this repo + workflow. Mirrors playcanvas/pcui + playcanvas/web-components.
+jobs:
+  publish:
+    name: Publish
+    runs-on: ubuntu-latest
+    if: ${{ github.repository_owner == 'playcanvas' }}
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24.x
+          registry-url: "https://registry.npmjs.org/"
+
+      - name: Run Publint
+        run: npx --yes publint
+
+      - name: Publish to npm
+        run: npm publish --provenance
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          generate_release_notes: true
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
