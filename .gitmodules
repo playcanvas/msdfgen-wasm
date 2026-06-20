@@ -1,0 +1,3 @@
+[submodule "vendor/msdfgen"]
+	path = vendor/msdfgen
+	url = https://github.com/Chlumsky/msdfgen
