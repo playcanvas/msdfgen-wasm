@@ -5,10 +5,7 @@
   "type": "module",
   "license": "MIT",
   "exports": {
-    ".": {
-      "types": "./dist/loader.d.ts",
-      "default": "./dist/loader.js"
-    },
+    ".": "./src/loader.js",
     "./msdfgen.wasm": "./dist/msdfgen.wasm"
   },
   "files": [
