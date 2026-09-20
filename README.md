@@ -28,6 +28,10 @@ font.delete();
 
 Glyphs are rendered **em-normalized** (`-emnormalize`, so 1 unit = 1 em, independent of the font's `unitsPerEm`) and autoframed into a `size`×`size` cell. Metrics are reported in em units; PlayCanvas's 32-unit em is applied downstream by `font-tools`.
 
+### Overlapping contours
+
+Fonts derived from variable masters (e.g. Roboto 3.x from Google Fonts, Bahnschrift, most Google statics) keep **overlapping and self-intersecting contours**: a stem drawn straight through a bowl, a cedilla poking into its base glyph. msdfgen takes each texel's sign from the nearest edge, so edges running inside the fill punch holes into the distance field at stroke junctions. Upstream fixes this with Skia's path ops (`-preprocess`), which would multiply the WASM size. Instead, `cpp/resolve-overlaps.cpp` performs the equivalent for the non-zero winding rule before edge coloring: contours are split where they cross, pieces inside the filled region are dropped, and the boundary is re-chained into clean contours. Glyphs without overlaps are left untouched, so their output is bit-identical to a plain msdfgen build.
+
 ## Building the WASM (maintainers)
 
 ```bash
