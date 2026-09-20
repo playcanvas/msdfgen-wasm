@@ -84,12 +84,24 @@ double clamp01(double x) { return std::min(1.0, std::max(0.0, x)); }
 
 bool samePoint(Point2 a, Point2 b) { return (a - b).squaredLength() <= POINT_EPS * POINT_EPS; }
 
+// Number of chords to flatten `e` into for the crossing search: the base count plus one chord
+// per 5 degrees the control polygon turns, so a strongly curved edge cannot cross another
+// (or itself) between two samples whose chords miss each other.
 int flattenSteps(const EdgeSegment *e) {
+    const Point2 *p = e->controlPoints();
+    int base, legs;
     switch (e->type()) {
-        case QuadraticSegment::EDGE_TYPE: return FLATTEN_STEPS_QUADRATIC;
-        case CubicSegment::EDGE_TYPE: return FLATTEN_STEPS_CUBIC;
+        case QuadraticSegment::EDGE_TYPE: base = FLATTEN_STEPS_QUADRATIC; legs = 2; break;
+        case CubicSegment::EDGE_TYPE: base = FLATTEN_STEPS_CUBIC; legs = 3; break;
         default: return 1;
     }
+    double turn = 0;
+    for (int i = 1; i < legs; ++i) {
+        Vector2 a = (p[i] - p[i - 1]).normalize(true), b = (p[i + 1] - p[i]).normalize(true);
+        turn += std::atan2(std::fabs(crossProduct(a, b)), dotProduct(a, b));
+    }
+    const double fiveDegrees = 3.14159265358979323846 / 36;
+    return std::min(base + (int) std::ceil(turn / fiveDegrees), 96);
 }
 
 // --- sub-curve extraction (polar forms / blossoms) ------------------------------------------
@@ -229,6 +241,31 @@ void findCrossings(const EdgeSegment *a, const EdgeSegment *b, std::vector<doubl
     }
 }
 
+// A cubic edge can loop back and cross itself (lines and quadratics cannot). Records both
+// parameters of any such crossing.
+void findSelfCrossings(const EdgeSegment *e, std::vector<double> &splits) {
+    if (e->type() != CubicSegment::EDGE_TYPE) return;
+    static std::vector<Point2> pts;
+    static std::vector<double> ts;
+    flatten(e, flattenSteps(e), pts, ts);
+    const double tol = 0.05;
+    for (size_t i = 0; i + 1 < pts.size(); ++i) {
+        Vector2 r = pts[i + 1] - pts[i];
+        for (size_t j = i + 2; j + 1 < pts.size(); ++j) { // neighbouring chords only share a vertex
+            Vector2 s = pts[j + 1] - pts[j];
+            double denom = crossProduct(r, s);
+            if (std::fabs(denom) < 1e-18) continue;
+            Vector2 d = pts[j] - pts[i];
+            double t = crossProduct(d, s) / denom, u = crossProduct(d, r) / denom;
+            if (t < -tol || t > 1 + tol || u < -tol || u > 1 + tol) continue;
+            double ta = mix(ts[i], ts[i + 1], clamp01(t)), tb = mix(ts[j], ts[j + 1], clamp01(u));
+            if (!refineCrossing(e, e, ta, tb) || std::fabs(ta - tb) < 1e-3) continue; // reject the trivial ta == tb solution
+            addSplit(e, splits, ta);
+            addSplit(e, splits, tb);
+        }
+    }
+}
+
 // If vertex v lies on the interior of e, returns true and its parameter.
 bool vertexOnEdge(const EdgeSegment *e, Point2 v, double &t) {
     const Point2 *p = e->controlPoints();
@@ -319,7 +356,7 @@ ResolveResult resolveOverlaps(Shape &shape) {
         }
     }
     const int n = (int) edges.size();
-    if (n < 2) return RESOLVE_UNCHANGED;
+    if (n == 0) return RESOLVE_UNCHANGED; // (a one-edge contour still gets its orientation probe)
 
     std::vector<Box> boxes(n);
     for (int i = 0; i < n; ++i) boxes[i] = boxOf(edges[i]);
@@ -345,6 +382,11 @@ ResolveResult resolveOverlaps(Shape &shape) {
                 contourTouched[edgeContour[j]] = true;
             }
         }
+    }
+    for (int k = 0; k < n; ++k) {
+        size_t before = splits[k].size();
+        findSelfCrossings(edges[k], splits[k]);
+        if (splits[k].size() != before) contourTouched[edgeContour[k]] = true;
     }
     for (int k = 0; k < n; ++k) {
         Point2 v = edges[k]->point(0);
@@ -453,7 +495,11 @@ ResolveResult resolveOverlaps(Shape &shape) {
             continue;
         }
         double len = polylineLength(piece.seg.get());
-        if (piece.split && len < MIN_PIECE_LEN) { piece.keep = false; continue; } // sliver from a split; the join is snapped shut
+        // A sub-tolerance sliver cut off by a split. Not kept, and deliberately not counted as a
+        // change: if nothing else about the shape changes, the original (unsplit) edges are
+        // returned untouched, and the sliver is simply part of the edge it came from. When the
+        // shape is rewritten, the neighbouring pieces are snapped together across the gap.
+        if (piece.split && len < MIN_PIECE_LEN) { piece.keep = false; continue; }
         double clearance = clearanceOf(piece);
         Side side = classify(shape, piece, len, clearance);
         TRACE("piece edge=%d contour=%d split=%d len=%.3g clearance=%.3g (%.6f,%.6f)->(%.6f,%.6f) side=%d\n",
