@@ -30,7 +30,7 @@ add_compile_definitions(MSDFGEN_DISABLE_VARIABLE_FONTS)
 
 add_subdirectory(vendor/msdfgen)
 
-add_executable(msdfgen cpp/binding.cpp)
+add_executable(msdfgen cpp/binding.cpp cpp/resolve-overlaps.cpp)
 target_link_libraries(msdfgen PRIVATE msdfgen::msdfgen msdfgen::msdfgen-ext)
 
 # FreeType comes from Emscripten's port (no separate build). Applied to msdfgen's ext too.

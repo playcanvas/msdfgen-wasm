@@ -16,6 +16,7 @@
 
 #include "msdfgen.h"
 #include "msdfgen-ext.h"
+#include "resolve-overlaps.h"
 
 using namespace emscripten;
 
@@ -57,6 +58,11 @@ public:
         if (!msdfgen::loadGlyph(shape, handle_, gindex, msdfgen::FONT_SCALING_EM_NORMALIZED, &advance)) {
             return val::null();
         }
+        // Fonts derived from variable masters (e.g. Roboto 3.x) keep overlapping/self-intersecting
+        // contours; msdfgen alone would read the edges inside the fill as boundary and punch
+        // holes at stroke junctions. Resolve them first (upstream needs Skia for this). This also
+        // reorients contours that run the wrong way for msdfgen, which would render inverted.
+        pcmsdf::resolveOverlaps(shape);
         shape.normalize();
         msdfgen::edgeColoringSimple(shape, 3.0);
 
@@ -81,6 +87,13 @@ public:
             msdfgen::generateMSDF(ref, shape,
                 msdfgen::Projection(msdfgen::Vector2(scale, scale), msdfgen::Vector2(tx, ty)),
                 msdfgen::Range(rangeEm));
+            // Scanline pass (what the msdfgen CLI does by default when built without Skia): flip
+            // any texel whose sign disagrees with the non-zero fill. A no-op for well-formed
+            // glyphs; it cleans up stray wedges/streaks that cusps and near-degenerate edges
+            // produce, and is the safety net when resolveOverlaps() could not re-chain a shape.
+            msdfgen::distanceSignCorrection(ref, shape,
+                msdfgen::Projection(msdfgen::Vector2(scale, scale), msdfgen::Vector2(tx, ty)),
+                msdfgen::FILL_NONZERO);
 
             // Pack to top-down RGBA (msdfgen bitmaps are bottom-up by default).
             for (int y = 0; y < size; ++y) {
