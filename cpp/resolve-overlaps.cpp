@@ -6,7 +6,8 @@
 //   3. Classify each piece by probing the winding number a hair to its left and right. A piece
 //      with fill on exactly one side is boundary (reversed if the fill is on its left, so the
 //      result matches msdfgen's fill-on-the-right convention); anything else is interior and
-//      is dropped.
+//      is dropped. Contours that touch nothing are decided by a single probe; if such a contour
+//      runs the wrong way (msdfgen would render it inverted) it is reversed as a whole.
 //   4. Chain the boundary pieces end-to-start into closed contours, snapping the joins exactly.
 //
 // Everything is in em units (glyphs are loaded em-normalized), so one font unit of a 2048 upem
@@ -49,10 +50,13 @@ using msdfgen::mix;
 
 namespace {
 
-constexpr double POINT_EPS = 1e-6;      // points closer than this are the same vertex
-constexpr double PARAM_EPS = 1e-6;      // split parameters this close to 0, 1 or each other merge
-constexpr double MIN_PIECE_LEN = 1e-6;  // shorter split pieces are degenerate slivers
-constexpr double MAX_PROBE = 1e-4;      // max offset of the winding probes on either side of a piece
+// Points closer than this are the same vertex. Fonts sit on an integer grid (>= 4.9e-4 em apart
+// at 2048 upem) but curves routinely pass a few 1e-5 em from a vertex they were meant to hit;
+// treating those as touching keeps the boundary chain closed. 2.5e-4 em is 0.008 px in a 64 px cell.
+constexpr double POINT_EPS = 2.5e-4;
+constexpr double MIN_PIECE_LEN = POINT_EPS; // shorter split pieces are slivers; the join is snapped shut
+constexpr double MAX_PROBE = 1e-4;          // max offset of the winding probes on either side of a piece
+constexpr double MAX_ORPHAN_LEN = 2e-3;     // dangling chains shorter than this (0.06 px) are discarded
 constexpr double MIN_PROBE = 1e-9;      // below this the piece is too pinched to classify
 constexpr double MIN_CONTOUR_AREA = 1e-9;
 constexpr int FLATTEN_STEPS_QUADRATIC = 8;
@@ -160,11 +164,12 @@ double polylineLength(const EdgeSegment *e, int steps = 8) {
 
 // --- intersection search ---------------------------------------------------------------------
 
-// Records a split parameter; returns false if it is at a vertex or already present.
-bool addSplit(std::vector<double> &splits, double t) {
-    if (t < PARAM_EPS || t > 1 - PARAM_EPS) return false; // at a vertex: nothing to split
+// Records a split parameter on e; returns false if it lands on a vertex or an existing split.
+bool addSplit(const EdgeSegment *e, std::vector<double> &splits, double t) {
+    Point2 p = e->point(t);
+    if (samePoint(p, e->point(0)) || samePoint(p, e->point(1))) return false; // at a vertex: nothing to split
     for (double s : splits)
-        if (std::fabs(s - t) < PARAM_EPS) return false;
+        if (samePoint(e->point(s), p)) return false;
     splits.push_back(t);
     return true;
 }
@@ -218,8 +223,8 @@ void findCrossings(const EdgeSegment *a, const EdgeSegment *b, std::vector<doubl
             double pta = mix(ta[i], ta[i + 1], clamp01(t)), ptb = mix(tb[j], tb[j + 1], clamp01(u));
             if (!refineCrossing(a, b, pta, ptb)) continue;
             incident = true;
-            split = addSplit(splitsA, pta) || split;
-            split = addSplit(splitsB, ptb) || split;
+            split = addSplit(a, splitsA, pta) || split;
+            split = addSplit(b, splitsB, ptb) || split;
         }
     }
 }
@@ -230,7 +235,7 @@ bool vertexOnEdge(const EdgeSegment *e, Point2 v, double &t) {
     Point2 end = e->point(1);
     if (samePoint(v, p[0]) || samePoint(v, end)) return false;
     SignedDistance sd = e->signedDistance(v, t);
-    if (std::fabs(sd.distance) > 8 * POINT_EPS) return false;
+    if (std::fabs(sd.distance) > 2 * POINT_EPS) return false;
     // Polish the closest-point parameter (cubic search is approximate).
     for (int i = 0; i < 4; ++i) {
         Vector2 d = derivative(e, t);
@@ -238,8 +243,9 @@ bool vertexOnEdge(const EdgeSegment *e, Point2 v, double &t) {
         if (dd == 0) break;
         t = clamp01(t + dotProduct(v - e->point(t), d) / dd);
     }
-    if (t <= PARAM_EPS || t >= 1 - PARAM_EPS) return false;
-    return samePoint(e->point(t), v);
+    Point2 q = e->point(t);
+    if (samePoint(q, p[0]) || samePoint(q, end)) return false;
+    return samePoint(q, v);
 }
 
 // --- pieces ----------------------------------------------------------------------------------
@@ -346,17 +352,15 @@ ResolveResult resolveOverlaps(Shape &shape) {
             if (m == k || adjacent(k, m) || !boxes[m].contains(v)) continue;
             double t;
             if (vertexOnEdge(edges[m], v, t)) {
-                addSplit(splits[m], t);
+                addSplit(edges[m], splits[m], t);
                 contourTouched[edgeContour[k]] = true;
                 contourTouched[edgeContour[m]] = true;
             }
         }
     }
 
-    bool anyTouched = false;
-    for (bool t : contourTouched) anyTouched = anyTouched || t;
-    // A single contour that never meets itself cannot overlap anything.
-    if (!anyTouched && shape.contours.size() <= 1) return RESOLVE_UNCHANGED;
+    // (No early-out for shapes that touch nothing: every contour still gets one winding probe
+    // below, which is what catches fonts whose outlines all run the wrong way, e.g. Roboto Mono.)
 
     // 2. Pieces.
     std::vector<Piece> pieces;
@@ -398,9 +402,27 @@ ResolveResult resolveOverlaps(Shape &shape) {
         }
         return best;
     };
-    bool anyDropped = false;
-    std::vector<int> contourVerdict(shape.contours.size(), 0); // 0 unknown, 1 keep, -1 drop
-    for (Piece &piece : pieces) {
+    bool changed = false;
+
+    // Pieces that retrace each other in opposite directions (the outline doubling back on itself,
+    // or two fills abutting along a shared stretch) enclose nothing and cancel out. Decide them
+    // here, before probing: their probes would land inside a zero-width sliver.
+    std::vector<bool> cancelled(pieces.size(), false);
+    for (size_t i = 0; i < pieces.size(); ++i) {
+        for (size_t j = i + 1; j < pieces.size(); ++j) {
+            if (cancelled[i] || cancelled[j]) continue;
+            if (samePoint(pieces[i].start, pieces[j].end) && samePoint(pieces[i].end, pieces[j].start) &&
+                samePoint(pieces[i].mid, pieces[j].mid)) {
+                cancelled[i] = cancelled[j] = true;
+                changed = true;
+            }
+        }
+    }
+
+    std::vector<int> contourVerdict(shape.contours.size(), 0); // 0 unknown, 1 keep, 2 keep reversed, -1 drop
+    for (size_t idx = 0; idx < pieces.size(); ++idx) {
+        Piece &piece = pieces[idx];
+        if (cancelled[idx]) { piece.keep = false; continue; }
         if (!contourTouched[piece.contour]) {
             int &verdict = contourVerdict[piece.contour];
             if (verdict == 0) {
@@ -415,12 +437,19 @@ ResolveResult resolveOverlaps(Shape &shape) {
                 probe.seg.reset(edges[best]->clone()); probe.parent = best; probe.contour = piece.contour;
                 probe.refresh();
                 Side side = classify(shape, probe, bestLen, clearanceOf(probe));
-                verdict = side == SIDE_INTERIOR ? -1 : 1;
-                if (verdict == -1) anyDropped = true;
-                // Note: an untouched contour that is wholly boundary is kept verbatim, including its
-                // orientation, so shapes without overlaps come out bit-identical.
+                if (side == SIDE_INTERIOR) {
+                    verdict = -1;
+                } else if (side == SIDE_BOUNDARY && probe.start != edges[best]->point(0)) {
+                    // classify() flipped the probe: the whole contour runs with the fill on its left.
+                    // msdfgen would render it inverted (e.g. Raleway's '6'), so reverse it.
+                    verdict = 2;
+                } else {
+                    verdict = 1; // kept verbatim, so shapes without overlaps come out bit-identical
+                }
+                if (verdict != 1) changed = true;
             }
-            piece.keep = verdict == 1;
+            piece.keep = verdict > 0;
+            if (verdict == 2) { piece.seg->reverse(); piece.refresh(); }
             continue;
         }
         double len = polylineLength(piece.seg.get());
@@ -434,10 +463,10 @@ ResolveResult resolveOverlaps(Shape &shape) {
             piece.keep = true;
         } else {
             piece.keep = false;
-            anyDropped = true;
+            changed = true;
         }
     }
-    if (!anyDropped) return RESOLVE_UNCHANGED;
+    if (!changed) return RESOLVE_UNCHANGED;
 
     // Coincident boundary pieces (two contours sharing an edge with the same orientation):
     // keep one.
@@ -478,8 +507,14 @@ ResolveResult resolveOverlaps(Shape &shape) {
             }
             if (next < 0) {
                 if (bestTurn < DBL_MAX) { closed = true; break; }
-                TRACE("dangling piece edge=%d end=(%.6f,%.6f) chain=%d\n", pieces[cur].parent, endPt.x, endPt.y, (int) chain.size());
-                return RESOLVE_FAILED; // dangling boundary piece: inconsistent geometry
+                // Dangling boundary piece. A sub-texel curl or sliver left over from a near-miss
+                // self-intersection is harmless to discard; anything larger means the geometry
+                // is inconsistent and we give up on this shape.
+                double chainLen = 0;
+                for (size_t idx : chain) chainLen += polylineLength(pieces[idx].seg.get());
+                TRACE("dangling piece edge=%d end=(%.6f,%.6f) chain=%d len=%.3g\n", pieces[cur].parent, endPt.x, endPt.y, (int) chain.size(), chainLen);
+                if (chainLen < MAX_ORPHAN_LEN) { chain.clear(); break; }
+                return RESOLVE_FAILED;
             }
             // Snap the join exactly.
             setStartPoint(pieces[next].seg.get(), endPt);
@@ -488,6 +523,7 @@ ResolveResult resolveOverlaps(Shape &shape) {
             chain.push_back(next);
             cur = next;
         }
+        if (chain.empty()) continue; // discarded orphan
         if (!closed) return RESOLVE_FAILED;
         setEndPoint(pieces[cur].seg.get(), pieces[s].start);
         Contour contour;
